@@ -1,0 +1,10 @@
+logic:
+  timeframe: "1h"
+  min_conf: 60
+  high_conf: 80
+  topN: 20
+risk:
+  tp_pct: 0.010
+  sl_pct: 0.010
+data:
+  source: "csv"
