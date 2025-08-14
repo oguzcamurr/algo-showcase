@@ -5,54 +5,82 @@ function show(el,on){ el.style.display = on ? "block":"none"; }
 function showErr(msg){ const el=$("#err"); el.textContent=msg||""; show(el, !!msg); }
 async function getJSON(url){ const r = await fetch(url); if(!r.ok) throw new Error(`${url} -> ${r.status}`); return await r.json(); }
 
-/* == Keep track of last equity series for marker refresh == */
+/* Track last equity for marker refresh */
 let lastEquityLabels = [];
 let lastEquityValues = [];
 
+/* ======== CONFIG / STATE ======== */
+let showMarkers = true;
+let clusterBars = 3;
+
+/* ======== Latest section ======== */
 async function loadLatest(){
   try{ const rows = await getJSON("/api/latest"); $("#root").textContent = JSON.stringify(rows.slice(-3), null, 2); }
   catch(e){ $("#root").textContent = "Failed to load /api/latest"; }
 }
 
-/* ================= Chart + Markers ================= */
-function buildMarkerDatasets(labels, values, trades){
-  if(!labels.length || !values.length || !trades.length) return [];
-  const idxMap = new Map(labels.map((t,i)=>[t,i]));
+/* ======== Clustering utilities ======== */
+// cluster per side, keeping first point in each window and averaging attrs
+function clusterByBars(trades, labels, bars){
+  if(!bars || bars<=0) return trades.slice();
+  if(!trades.length) return [];
 
+  const idxMap = new Map(labels.map((t,i)=>[t,i]));
+  // split by side
+  const bySide = { BUY:[], SELL:[] };
+  for(const r of trades){
+    const idx = idxMap.get(r.time);
+    if(idx==null) continue;
+    bySide[(String(r.direction).toUpperCase()==="BUY")?"BUY":"SELL"].push({...r, _idx:idx});
+  }
+  const out = [];
+  for(const side of ["BUY","SELL"]){
+    const arr = bySide[side].sort((a,b)=>a._idx-b._idx);
+    let i=0;
+    while(i<arr.length){
+      const start = arr[i];
+      const windowEnd = start._idx + bars;
+      // gather cluster members within window
+      const cluster = [start];
+      let j=i+1;
+      while(j<arr.length && arr[j]._idx - start._idx < bars){ cluster.push(arr[j]); j++; }
+      // representative: first time, avg entry/exit/ret
+      const avg = (key)=> cluster.reduce((s,x)=>s+Number(x[key]||0),0)/cluster.length;
+      out.push({
+        time: start.time,
+        direction: side,
+        entry: +avg("entry").toFixed(4),
+        exit: +avg("exit").toFixed(4),
+        ret_pct: +avg("ret_pct").toFixed(2),
+        pnl_usd: +avg("pnl_usd").toFixed(2),
+      });
+      i=j;
+    }
+  }
+  // preserve chronological order across sides
+  return out.sort((a,b)=> (idxMap.get(a.time)||0) - (idxMap.get(b.time)||0));
+}
+
+/* ======== Chart + Markers ======== */
+function buildMarkerDatasets(labels, values, trades){
+  if(!showMarkers) return [];        // hidden
+  if(!labels.length || !values.length || !trades.length) return [];
+
+  const idxMap = new Map(labels.map((t,i)=>[t,i]));
   const buys = [], sells = [];
   for(const r of trades){
     const i = idxMap.get(r.time);
-    if(i==null) continue; // trade time not on chart
+    if(i==null) continue;
     const y = values[i];
-    const point = { x: labels[i], y, entry: r.entry, exit: r.exit, ret_pct: r.ret_pct, side: r.direction };
-    if(String(r.direction).toUpperCase()==="BUY") buys.push(point); else sells.push(point);
+    const p = { x: labels[i], y, entry: r.entry, exit: r.exit, ret_pct: r.ret_pct, side: r.direction };
+    if(String(r.direction).toUpperCase()==="BUY") buys.push(p); else sells.push(p);
   }
 
   return [
-    {
-      type: "scatter",
-      label: "BUY",
-      showLine: false,
-      pointRadius: 4,
-      pointHoverRadius: 5,
-      pointStyle: "triangle",
-      borderColor: "#10b981",
-      backgroundColor: "#10b981",
-      data: buys
-    },
-    {
-      type: "scatter",
-      label: "SELL",
-      showLine: false,
-      pointRadius: 4,
-      pointHoverRadius: 5,
-      // triangle ters çevirmek için rotation
-      pointStyle: "triangle",
-      rotation: 180,
-      borderColor: "#ef4444",
-      backgroundColor: "#ef4444",
-      data: sells
-    }
+    { type:"scatter", label:"BUY", showLine:false, pointRadius:4, pointHoverRadius:5,
+      pointStyle:"triangle", borderColor:"#10b981", backgroundColor:"#10b981", data:buys },
+    { type:"scatter", label:"SELL", showLine:false, pointRadius:4, pointHoverRadius:5,
+      pointStyle:"triangle", rotation:180, borderColor:"#ef4444", backgroundColor:"#ef4444", data:sells }
   ];
 }
 
@@ -85,23 +113,18 @@ function drawChart(labels, data, tradesForMarkers=[]){
         legend:{ display:true },
         tooltip:{
           callbacks:{
-            // Scatter noktalarında daha zengin tooltip
             label: function(ctx){
               const raw = ctx.raw || {};
               if(raw && (ctx.dataset.label==="BUY" || ctx.dataset.label==="SELL")){
-                const lines = [];
-                lines.push(` ${ctx.dataset.label} @ Equity: $${fmt(ctx.parsed.y,2)}`);
-                lines.push(` Entry: ${fmt(raw.entry,4)}  Exit: ${fmt(raw.exit,4)}`);
-                lines.push(` Ret%: ${fmt(raw.ret_pct,2)}`);
-                return lines;
+                return [
+                  ` ${ctx.dataset.label} @ Equity: $${fmt(ctx.parsed.y,2)}`,
+                  ` Entry: ${fmt(raw.entry,4)}  Exit: ${fmt(raw.exit,4)}`,
+                  ` Ret%: ${fmt(raw.ret_pct,2)}`
+                ];
               }
-              // Ana çizgi için varsayılan
               return ` Equity: $${fmt(ctx.parsed.y,2)}`;
             },
-            title: function(items){
-              const it = items[0];
-              return it && it.label ? it.label : '';
-            }
+            title: (items)=> items[0]?.label || ''
           }
         }
       }
@@ -111,11 +134,12 @@ function drawChart(labels, data, tradesForMarkers=[]){
 
 function refreshMarkers(){
   if(!chart || !lastEquityLabels.length) return;
-  // Grafik komple yeniden çizmek en kolayı ve küçük veri için gayet yeterli.
-  drawChart(lastEquityLabels, lastEquityValues, TRADES_VIEW);
+  // trades -> cluster -> redraw
+  const clustered = clusterByBars(TRADES_VIEW, lastEquityLabels, clusterBars);
+  drawChart(lastEquityLabels, lastEquityValues, clustered);
 }
 
-/* ================= Trades state (filters + sort) ================= */
+/* ======== Trades state (filters + sort) ======== */
 let TRADES_ALL = [];
 let TRADES_VIEW = [];
 let sortKey = "time";
@@ -123,13 +147,11 @@ let sortDir = "desc";
 let sideFilter = "ALL";
 let resultFilter = "ALL"; // ALL | WIN | LOSS
 
-// data bounds & live filters
-let bounds = { ret: {min: 0, max: 0}, pnl: {min: 0, max: 0} };
-let filters = { retMin: null, retMax: null, pnlMin: null, pnlMax: null };
+let bounds = { ret:{min:0,max:0}, pnl:{min:0,max:0} };
+let filters = { retMin:null, retMax:null, pnlMin:null, pnlMax:null };
 
 const KEY_TYPES = { time:"str", direction:"str", entry:"num", exit:"num", ret_pct:"num", pnl_usd:"num" };
 const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
-
 function setActiveSeg(id){ ["resAll","resWin","resLoss"].forEach(x=>$("#"+x)?.classList.toggle("active", x===id)); }
 
 function enforceResultLock(){
@@ -248,8 +270,7 @@ function applyFiltersAndSort(){
   });
 
   renderTrades(TRADES_VIEW);
-  // markers da filtre ile birlikte güncellensin
-  refreshMarkers();
+  refreshMarkers(); // sync markers with current view
 }
 
 function headerCell(label,key){
@@ -289,7 +310,7 @@ function renderTrades(rows){
   });
 }
 
-/* ============== CSV ============== */
+/* ======== CSV ======== */
 function toCSV(rows){
   const cols=["time","direction","entry","exit","ret_pct","pnl_usd"];
   const esc=v=>v==null?"":(/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:String(v));
@@ -305,7 +326,7 @@ function downloadCSV(){
   const a=document.createElement("a"); a.href=url; a.download=fname; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 
-/* ============== Data load ============== */
+/* ======== Data load ======== */
 async function loadEquityMetricsTrades(){
   showErr("");
   const sel=$("#range").value;
@@ -347,15 +368,13 @@ async function loadEquityMetricsTrades(){
 
     TRADES_ALL = Array.isArray(t)?t.slice():[];
     setBoundsFromData();
-
-    // draw with markers from current (initial) view
-    applyFiltersAndSort(); // will render table and refresh markers after filtering
-    drawChart(labels, data, TRADES_VIEW); // initial draw (also saves last series)
+    applyFiltersAndSort(); // table+markers refresh with clustering
+    drawChart(labels, data, clusterByBars(TRADES_VIEW, labels, clusterBars)); // initial draw
   }catch(e){ showErr("Backend error: "+e.message);
   }finally{ show(eqSpin,false); show(mtSpin,false); show(trSpin,false); }
 }
 
-/* ============== UI bind ============== */
+/* ======== UI bind ======== */
 function bindUI(){
   const sel=$("#range"), custom=$("#customRange");
   const toggle=()=>{ const isCustom=sel.value==="custom"; custom.style.display=isCustom?"flex":"none"; if(!isCustom) loadEquityMetricsTrades(); };
@@ -374,6 +393,18 @@ function bindUI(){
   });
 
   $("#btnCsv").addEventListener("click", downloadCSV);
+
+  // NEW: marker controls
+  const chk=$("#toggleMarkers");
+  if(chk){ chk.addEventListener("change", ()=>{ showMarkers = chk.checked; refreshMarkers(); }); }
+  const selCluster=$("#clusterWin");
+  if(selCluster){
+    selCluster.addEventListener("change", ()=>{
+      clusterBars = parseInt(selCluster.value,10) || 0;
+      refreshMarkers();
+    });
+  }
+
   $("#btnReset").addEventListener("click", resetFilters);
 
   toggle();

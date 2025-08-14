@@ -64,6 +64,18 @@
       <div id="equitySpin" class="spinner"></div>
       <div id="err"></div>
       <canvas id="equityChart" width="900" height="260"></canvas>
+      <!-- NEW: marker controls -->
+      <div class="row" style="margin-top:8px">
+        <label><input type="checkbox" id="toggleMarkers" checked> Show markers</label>
+        <span class="muted">Cluster:</span>
+        <select id="clusterWin">
+          <option value="0">Off</option>
+          <option value="2">2 bars</option>
+          <option value="3" selected>3 bars</option>
+          <option value="5">5 bars</option>
+          <option value="8">8 bars</option>
+        </select>
+      </div>
     </div>
 
     <div class="card">
@@ -92,7 +104,6 @@
         </div>
       </div>
 
-      <!-- Range filters -->
       <div class="row" id="rangeFilters" style="margin-top:8px; display:none;">
         <div class="slider-group">
           <div class="label">Ret% range</div>
