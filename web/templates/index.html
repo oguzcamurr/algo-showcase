@@ -32,6 +32,11 @@
     .slider-row input[type="range"]{width:210px}
     .chip{font-size:12px;padding:2px 8px;border:1px solid #ddd;border-radius:999px;background:#fafafa}
     .spacer{flex:1}
+    /* segmented toggle */
+    .seg{display:inline-flex;border:1px solid #ddd;border-radius:10px;overflow:hidden}
+    .seg button{border:0;border-right:1px solid #ddd;background:#fafafa;padding:6px 10px;cursor:pointer}
+    .seg button:last-child{border-right:0}
+    .seg button.active{background:#e8f2ff}
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -78,6 +83,11 @@
             <option value="BUY">BUY</option>
             <option value="SELL">SELL</option>
           </select>
+          <div class="seg" id="resultSeg">
+            <button id="resAll"   class="active" title="Show all trades">All</button>
+            <button id="resWin"   title="Only winners (PnL > 0)">Winners</button>
+            <button id="resLoss"  title="Only losers (PnL < 0)">Losers</button>
+          </div>
           <button id="btnCsv" class="primary" title="Download current table as CSV">Download CSV</button>
           <span id="activeFilters" class="chip" style="display:none;"></span>
         </div>

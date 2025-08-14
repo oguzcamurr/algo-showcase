@@ -29,6 +29,7 @@ let TRADES_VIEW = [];
 let sortKey = "time";
 let sortDir = "desc";
 let sideFilter = "ALL";
+let resultFilter = "ALL"; // ALL | WIN | LOSS
 
 // dynamic ranges
 let bounds = {
@@ -49,7 +50,13 @@ const KEY_TYPES = {
   pnl_usd: "num",
 };
 
-function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
+function setActiveSeg(id){
+  ["resAll","resWin","resLoss"].forEach(x=>{
+    const btn = $("#"+x);
+    if(!btn) return;
+    btn.classList.toggle("active", x===id);
+  });
+}
 
 function setBoundsFromData(){
   if(!TRADES_ALL.length){
@@ -60,35 +67,24 @@ function setBoundsFromData(){
   const pnls = TRADES_ALL.map(r=>Number(r.pnl_usd)).filter(n=>!Number.isNaN(n));
   const rmin = Math.min(...rets), rmax = Math.max(...rets);
   const pmin = Math.min(...pnls), pmax = Math.max(...pnls);
-
-  // tiny padding for nicer UX
   const pad = (x)=> Math.abs(x)*0.02;
+
   bounds.ret.min = Math.floor((rmin - pad(rmin)) * 100)/100;
   bounds.ret.max = Math.ceil((rmax + pad(rmax)) * 100)/100;
   bounds.pnl.min = Math.floor((pmin - pad(pmin)) * 100)/100;
   bounds.pnl.max = Math.ceil((pmax + pad(pmax)) * 100)/100;
 
-  // default filters = full range
   filters.retMin = bounds.ret.min;
   filters.retMax = bounds.ret.max;
   filters.pnlMin = bounds.pnl.min;
   filters.pnlMax = bounds.pnl.max;
 
-  // init sliders
   const retMinEl = $("#retMin"), retMaxEl = $("#retMax");
   const pnlMinEl = $("#pnlMin"), pnlMaxEl = $("#pnlMax");
-
-  [retMinEl, retMaxEl].forEach(el=>{
-    el.min = bounds.ret.min; el.max = bounds.ret.max; el.step = "0.01";
-  });
-  [pnlMinEl, pnlMaxEl].forEach(el=>{
-    el.min = bounds.pnl.min; el.max = bounds.pnl.max; el.step = "0.01";
-  });
-
-  retMinEl.value = filters.retMin;
-  retMaxEl.value = filters.retMax;
-  pnlMinEl.value = filters.pnlMin;
-  pnlMaxEl.value = filters.pnlMax;
+  [retMinEl, retMaxEl].forEach(el=>{ el.min=bounds.ret.min; el.max=bounds.ret.max; el.step="0.01"; });
+  [pnlMinEl, pnlMaxEl].forEach(el=>{ el.min=bounds.pnl.min; el.max=bounds.pnl.max; el.step="0.01"; });
+  retMinEl.value = filters.retMin; retMaxEl.value = filters.retMax;
+  pnlMinEl.value = filters.pnlMin; pnlMaxEl.value = filters.pnlMax;
 
   updateRangeReadouts();
   show($("#rangeFilters"), true);
@@ -103,25 +99,21 @@ function updateRangeReadouts(){
     filters.retMax===bounds.ret.max &&
     filters.pnlMin===bounds.pnl.min &&
     filters.pnlMax===bounds.pnl.max &&
-    sideFilter==="ALL"
+    sideFilter==="ALL" &&
+    resultFilter==="ALL"
   );
   const chip = $("#activeFilters");
   if(isDefault){ show(chip,false); chip.textContent=""; }
   else{
-    chip.textContent = `Side:${sideFilter} • Ret%:${filters.retMin}→${filters.retMax} • PnL:${filters.pnlMin}→${filters.pnlMax}`;
+    const resTxt = (resultFilter==="WIN"?"Winners":(resultFilter==="LOSS"?"Losers":"All"));
+    chip.textContent = `Side:${sideFilter} • Result:${resTxt} • Ret%:${filters.retMin}→${filters.retMax} • PnL:${filters.pnlMin}→${filters.pnlMax}`;
     show(chip,true);
   }
 }
 
 function enforceMinMaxCouple(aEl,bEl,isRet){
-  // keep min <= max by swapping if needed
   const minVal = Number(aEl.value), maxVal = Number(bEl.value);
-  if(minVal > maxVal){
-    // swap
-    const tmp = aEl.value;
-    aEl.value = bEl.value;
-    bEl.value = tmp;
-  }
+  if(minVal > maxVal){ const tmp=aEl.value; aEl.value=bEl.value; bEl.value=tmp; }
   if(isRet){
     filters.retMin = Number($("#retMin").value);
     filters.retMax = Number($("#retMax").value);
@@ -144,6 +136,9 @@ function onSliderChange(){
 
 function resetFilters(){
   sideFilter = "ALL";
+  resultFilter = "ALL";
+  setActiveSeg("resAll");
+
   filters.retMin = bounds.ret.min;
   filters.retMax = bounds.ret.max;
   filters.pnlMin = bounds.pnl.min;
@@ -164,7 +159,9 @@ function applyFiltersAndSort(){
     const ret = Number(r.ret_pct), pnl = Number(r.pnl_usd);
     const retOk = ret >= filters.retMin && ret <= filters.retMax;
     const pnlOk = pnl >= filters.pnlMin && pnl <= filters.pnlMax;
-    return sideOk && retOk && pnlOk;
+    const resOk = (resultFilter==="ALL") ? true :
+                  (resultFilter==="WIN" ? pnl > 0 : pnl < 0);
+    return sideOk && retOk && pnlOk && resOk;
   });
 
   const t = KEY_TYPES[sortKey] || "str";
@@ -242,10 +239,11 @@ function toCSV(rows){
 function downloadCSV(){
   const rows = TRADES_VIEW.length ? TRADES_VIEW : TRADES_ALL;
   if(!rows.length){ alert("No trades to export."); return; }
+  const res = resultFilter.toLowerCase();
   const side = sideFilter.toLowerCase();
   const now = new Date();
   const pad = n => String(n).padStart(2,"0");
-  const fname = `trades_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}_${side}.csv`;
+  const fname = `trades_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}_${side}_${res}.csv`;
 
   const csv = toCSV(rows);
   const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8;"});
@@ -328,11 +326,22 @@ function bindUI(){
     updateRangeReadouts();
     applyFiltersAndSort();
   });
-  const sliders = ["retMin","retMax","pnlMin","pnlMax"].map(id=>$("#"+id));
-  sliders.forEach(el=>{
+
+  // result segmented control
+  const seg = $("#resultSeg");
+  if(seg){
+    $("#resAll").addEventListener("click", ()=>{ resultFilter="ALL"; setActiveSeg("resAll"); updateRangeReadouts(); applyFiltersAndSort(); });
+    $("#resWin").addEventListener("click", ()=>{ resultFilter="WIN"; setActiveSeg("resWin"); updateRangeReadouts(); applyFiltersAndSort(); });
+    $("#resLoss").addEventListener("click", ()=>{ resultFilter="LOSS"; setActiveSeg("resLoss"); updateRangeReadouts(); applyFiltersAndSort(); });
+  }
+
+  // sliders
+  ["retMin","retMax","pnlMin","pnlMax"].forEach(id=>{
+    const el = $("#"+id);
     el.addEventListener("input", onSliderChange);
     el.addEventListener("change", onSliderChange);
   });
+
   const btn = $("#btnCsv");
   if(btn) btn.addEventListener("click", downloadCSV);
   const btnReset = $("#btnReset");
