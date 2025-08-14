@@ -15,7 +15,9 @@
     .kpi{background:#fafafa;border:1px solid #eee;border-radius:10px;padding:10px;text-align:center}
     .label{font-size:12px;color:#666}
     .value{font-size:20px;font-weight:700;margin-top:4px}
-    select{padding:6px 8px;border:1px solid #ddd;border-radius:8px}
+    select,input{padding:6px 8px;border:1px solid #ddd;border-radius:8px}
+    .note{font-size:12px;color:#666}
+    #err{color:#b00020;font-size:13px;margin-top:6px;display:none}
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -31,11 +33,18 @@
         <option value="30" selected>30d</option>
         <option value="90">90d</option>
         <option value="">All</option>
+        <option value="custom">Custom</option>
       </select>
+      <div id="customRange" style="display:none; gap:6px; align-items:center;">
+        <input type="date" id="startDate">
+        <input type="date" id="endDate">
+        <span class="note">(start & end seç)</span>
+      </div>
     </div>
 
     <div class="card">
       <h3>Equity Curve</h3>
+      <div id="err"></div>
       <canvas id="equityChart" width="900" height="260"></canvas>
     </div>
 
