@@ -22,11 +22,13 @@ async function loadLatest(){
 /* ======== Clustering utilities ======== */
 // cluster per side, keeping first point in each window and averaging attrs
 function clusterByBars(trades, labels, bars){
-  if(!bars || bars<=0) return trades.slice();
+  if(!bars || bars<=0) {
+    // non-cluster modunda her işleme count=1 ekleyelim
+    return trades.map(r => ({...r, count: 1}));
+  }
   if(!trades.length) return [];
 
   const idxMap = new Map(labels.map((t,i)=>[t,i]));
-  // split by side
   const bySide = { BUY:[], SELL:[] };
   for(const r of trades){
     const idx = idxMap.get(r.time);
@@ -39,12 +41,9 @@ function clusterByBars(trades, labels, bars){
     let i=0;
     while(i<arr.length){
       const start = arr[i];
-      const windowEnd = start._idx + bars;
-      // gather cluster members within window
       const cluster = [start];
       let j=i+1;
       while(j<arr.length && arr[j]._idx - start._idx < bars){ cluster.push(arr[j]); j++; }
-      // representative: first time, avg entry/exit/ret
       const avg = (key)=> cluster.reduce((s,x)=>s+Number(x[key]||0),0)/cluster.length;
       out.push({
         time: start.time,
@@ -53,11 +52,11 @@ function clusterByBars(trades, labels, bars){
         exit: +avg("exit").toFixed(4),
         ret_pct: +avg("ret_pct").toFixed(2),
         pnl_usd: +avg("pnl_usd").toFixed(2),
+        count: cluster.length
       });
       i=j;
     }
   }
-  // preserve chronological order across sides
   return out.sort((a,b)=> (idxMap.get(a.time)||0) - (idxMap.get(b.time)||0));
 }
 
@@ -67,20 +66,65 @@ function buildMarkerDatasets(labels, values, trades){
   if(!labels.length || !values.length || !trades.length) return [];
 
   const idxMap = new Map(labels.map((t,i)=>[t,i]));
+  const valMin = Math.min(...values), valMax = Math.max(...values);
+  const valRange = Math.max(1, valMax - valMin);
+
+  // Yoğunluk tespiti için indeksler (yan yana barlar = dense)
+  const bySideIdx = { BUY:[], SELL:[] };
+  for(const r of trades){
+    const i = idxMap.get(r.time);
+    if(i!=null) bySideIdx[(String(r.direction).toUpperCase()==="BUY")?"BUY":"SELL"].push(i);
+  }
+  bySideIdx.BUY.sort((a,b)=>a-b); bySideIdx.SELL.sort((a,b)=>a-b);
+  const denseSet = new Set();
+  function markDense(list){
+    for(let k=1;k<list.length;k++){
+      if(list[k]-list[k-1] <= 1){ denseSet.add(list[k]); denseSet.add(list[k-1]); }
+    }
+  }
+  markDense(bySideIdx.BUY); markDense(bySideIdx.SELL);
+
+  // Boyut için max |PnL|
+  const maxAbsPnl = Math.max(1, ...trades.map(r => Math.abs(Number(r.pnl_usd)||0)));
+
   const buys = [], sells = [];
   for(const r of trades){
     const i = idxMap.get(r.time);
     if(i==null) continue;
-    const y = values[i];
-    const p = { x: labels[i], y, entry: r.entry, exit: r.exit, ret_pct: r.ret_pct, side: r.direction };
-    if(String(r.direction).toUpperCase()==="BUY") buys.push(p); else sells.push(p);
+    const baseY = values[i];
+
+    // yoğunsa alpha düşür ve küçük jitter uygula
+    const isDense = denseSet.has(i);
+    const alpha = isDense ? 0.5 : 1.0;
+    const jitter = isDense ? ((i%2?1:-1) * (valRange * 0.003)) : 0; // ~%0.3'lik küçük oynatma
+    const y = baseY + jitter;
+
+    // radius: 3..10 arası, |PnL| oranlı
+    const absP = Math.abs(Number(r.pnl_usd)||0);
+    const radius = 3 + Math.round(7 * (absP / maxAbsPnl)); // 3..10
+
+    const green = (a)=>`rgba(16,185,129,${a})`, red=(a)=>`rgba(239,68,68,${a})`;
+    const point = {
+      x: labels[i],
+      y,
+      entry: r.entry,
+      exit: r.exit,
+      ret_pct: r.ret_pct,
+      side: r.direction,
+      count: r.count || 1,
+      pointRadius: radius,
+      pointHoverRadius: Math.min(12, radius+2),
+      pointBackgroundColor: String(r.direction).toUpperCase()==="BUY" ? green(alpha) : red(alpha),
+      pointBorderColor: String(r.direction).toUpperCase()==="BUY" ? green(alpha) : red(alpha),
+    };
+    if(String(r.direction).toUpperCase()==="BUY") buys.push(point); else sells.push(point);
   }
 
   return [
-    { type:"scatter", label:"BUY", showLine:false, pointRadius:4, pointHoverRadius:5,
-      pointStyle:"triangle", borderColor:"#10b981", backgroundColor:"#10b981", data:buys },
-    { type:"scatter", label:"SELL", showLine:false, pointRadius:4, pointHoverRadius:5,
-      pointStyle:"triangle", rotation:180, borderColor:"#ef4444", backgroundColor:"#ef4444", data:sells }
+    { type:"scatter", label:"BUY", showLine:false,
+      pointStyle:"triangle", data:buys },
+    { type:"scatter", label:"SELL", showLine:false,
+      pointStyle:"triangle", rotation:180, data:sells }
   ];
 }
 
@@ -116,10 +160,12 @@ function drawChart(labels, data, tradesForMarkers=[]){
             label: function(ctx){
               const raw = ctx.raw || {};
               if(raw && (ctx.dataset.label==="BUY" || ctx.dataset.label==="SELL")){
+                const n = raw.count || 1;
                 return [
                   ` ${ctx.dataset.label} @ Equity: $${fmt(ctx.parsed.y,2)}`,
                   ` Entry: ${fmt(raw.entry,4)}  Exit: ${fmt(raw.exit,4)}`,
-                  ` Ret%: ${fmt(raw.ret_pct,2)}`
+                  ` Ret%: ${fmt(raw.ret_pct,2)}`,
+                  ` ${n} trade${n>1?"s":""} (avg)`
                 ];
               }
               return ` Equity: $${fmt(ctx.parsed.y,2)}`;
@@ -134,7 +180,6 @@ function drawChart(labels, data, tradesForMarkers=[]){
 
 function refreshMarkers(){
   if(!chart || !lastEquityLabels.length) return;
-  // trades -> cluster -> redraw
   const clustered = clusterByBars(TRADES_VIEW, lastEquityLabels, clusterBars);
   drawChart(lastEquityLabels, lastEquityValues, clustered);
 }
@@ -349,16 +394,15 @@ async function loadEquityMetricsTrades(){
     const labels=rows.map(r=>r.t), data=rows.map(r=>r.equity);
     if(!labels.length) showErr("No data for selected range.");
 
-    // metrics
-    const pfState=m.pf>1?"good":"bad";
-    const winState=m.winrate>=50?"good":"warn";
-    const ddState=m.max_dd<=-10?"bad":"good";
-    const shState=m.sharpe>=1?"good":"warn";
     const card=(val,label,state)=>{
       const bg=state==="good"?"#e8f7ee":state==="warn"?"#fff7e6":state==="bad"?"#fdeaea":"#fafafa";
       const br=state==="good"?"#b7e3c7":state==="warn"?"#ffe1b3":state==="bad"?"#f7b9b9":"#eee";
       return `<div class="kpi" style="background:${bg};border-color:${br}"><div class="label">${label}</div><div class="value">${val}</div></div>`;
     };
+    const pfState=m.pf>1?"good":"bad";
+    const winState=m.winrate>=50?"good":"warn";
+    const ddState=m.max_dd<=-10?"bad":"good";
+    const shState=m.sharpe>=1?"good":"warn";
     $("#metrics").innerHTML=
       card(fmt(m.samples,0),"Samples","")+
       card(fmt(m.winrate,2)+"%","Win%",winState)+
@@ -368,7 +412,7 @@ async function loadEquityMetricsTrades(){
 
     TRADES_ALL = Array.isArray(t)?t.slice():[];
     setBoundsFromData();
-    applyFiltersAndSort(); // table+markers refresh with clustering
+    applyFiltersAndSort(); // table + markers
     drawChart(labels, data, clusterByBars(TRADES_VIEW, labels, clusterBars)); // initial draw
   }catch(e){ showErr("Backend error: "+e.message);
   }finally{ show(eqSpin,false); show(mtSpin,false); show(trSpin,false); }
@@ -394,7 +438,7 @@ function bindUI(){
 
   $("#btnCsv").addEventListener("click", downloadCSV);
 
-  // NEW: marker controls
+  // marker controls
   const chk=$("#toggleMarkers");
   if(chk){ chk.addEventListener("change", ()=>{ showMarkers = chk.checked; refreshMarkers(); }); }
   const selCluster=$("#clusterWin");
