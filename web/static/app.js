@@ -5,25 +5,117 @@ function show(el,on){ el.style.display = on ? "block":"none"; }
 function showErr(msg){ const el=$("#err"); el.textContent=msg||""; show(el, !!msg); }
 async function getJSON(url){ const r = await fetch(url); if(!r.ok) throw new Error(`${url} -> ${r.status}`); return await r.json(); }
 
+/* == Keep track of last equity series for marker refresh == */
+let lastEquityLabels = [];
+let lastEquityValues = [];
+
 async function loadLatest(){
   try{ const rows = await getJSON("/api/latest"); $("#root").textContent = JSON.stringify(rows.slice(-3), null, 2); }
   catch(e){ $("#root").textContent = "Failed to load /api/latest"; }
 }
 
-function drawChart(labels, data){
+/* ================= Chart + Markers ================= */
+function buildMarkerDatasets(labels, values, trades){
+  if(!labels.length || !values.length || !trades.length) return [];
+  const idxMap = new Map(labels.map((t,i)=>[t,i]));
+
+  const buys = [], sells = [];
+  for(const r of trades){
+    const i = idxMap.get(r.time);
+    if(i==null) continue; // trade time not on chart
+    const y = values[i];
+    const point = { x: labels[i], y, entry: r.entry, exit: r.exit, ret_pct: r.ret_pct, side: r.direction };
+    if(String(r.direction).toUpperCase()==="BUY") buys.push(point); else sells.push(point);
+  }
+
+  return [
+    {
+      type: "scatter",
+      label: "BUY",
+      showLine: false,
+      pointRadius: 4,
+      pointHoverRadius: 5,
+      pointStyle: "triangle",
+      borderColor: "#10b981",
+      backgroundColor: "#10b981",
+      data: buys
+    },
+    {
+      type: "scatter",
+      label: "SELL",
+      showLine: false,
+      pointRadius: 4,
+      pointHoverRadius: 5,
+      // triangle ters çevirmek için rotation
+      pointStyle: "triangle",
+      rotation: 180,
+      borderColor: "#ef4444",
+      backgroundColor: "#ef4444",
+      data: sells
+    }
+  ];
+}
+
+function drawChart(labels, data, tradesForMarkers=[]){
   const ctx = $("#equityChart").getContext("2d");
   if(chart) chart.destroy();
+
+  lastEquityLabels = labels.slice();
+  lastEquityValues = data.slice();
+
   const yMin = 0;
   const maxVal = data.length ? Math.max(...data) : 100;
   const yMax = Math.ceil(maxVal/100)*100 || 100;
+
+  const markerDatasets = buildMarkerDatasets(labels, data, tradesForMarkers);
+
   chart = new Chart(ctx,{
     type:"line",
-    data:{labels, datasets:[{label:"Equity ($)", data, tension:0.25, fill:false, pointRadius:0}]},
-    options:{ responsive:false, animation:false, scales:{ x:{ticks:{maxTicksLimit:6}}, y:{min:yMin,max:yMax,ticks:{stepSize:100}} }, plugins:{legend:{display:true}} }
+    data:{
+      labels,
+      datasets:[
+        { label:"Equity ($)", data, tension:0.25, fill:false, pointRadius:0 },
+        ...markerDatasets
+      ]
+    },
+    options:{
+      responsive:false, animation:false,
+      scales:{ x:{ticks:{maxTicksLimit:6}}, y:{min:yMin,max:yMax,ticks:{stepSize:100}} },
+      plugins:{
+        legend:{ display:true },
+        tooltip:{
+          callbacks:{
+            // Scatter noktalarında daha zengin tooltip
+            label: function(ctx){
+              const raw = ctx.raw || {};
+              if(raw && (ctx.dataset.label==="BUY" || ctx.dataset.label==="SELL")){
+                const lines = [];
+                lines.push(` ${ctx.dataset.label} @ Equity: $${fmt(ctx.parsed.y,2)}`);
+                lines.push(` Entry: ${fmt(raw.entry,4)}  Exit: ${fmt(raw.exit,4)}`);
+                lines.push(` Ret%: ${fmt(raw.ret_pct,2)}`);
+                return lines;
+              }
+              // Ana çizgi için varsayılan
+              return ` Equity: $${fmt(ctx.parsed.y,2)}`;
+            },
+            title: function(items){
+              const it = items[0];
+              return it && it.label ? it.label : '';
+            }
+          }
+        }
+      }
+    }
   });
 }
 
-/* === Trades state (filter + sort) === */
+function refreshMarkers(){
+  if(!chart || !lastEquityLabels.length) return;
+  // Grafik komple yeniden çizmek en kolayı ve küçük veri için gayet yeterli.
+  drawChart(lastEquityLabels, lastEquityValues, TRADES_VIEW);
+}
+
+/* ================= Trades state (filters + sort) ================= */
 let TRADES_ALL = [];
 let TRADES_VIEW = [];
 let sortKey = "time";
@@ -154,7 +246,10 @@ function applyFiltersAndSort(){
     if(va>vb) return sortDir==="asc"? 1:-1;
     return 0;
   });
+
   renderTrades(TRADES_VIEW);
+  // markers da filtre ile birlikte güncellensin
+  refreshMarkers();
 }
 
 function headerCell(label,key){
@@ -194,7 +289,7 @@ function renderTrades(rows){
   });
 }
 
-/* CSV */
+/* ============== CSV ============== */
 function toCSV(rows){
   const cols=["time","direction","entry","exit","ret_pct","pnl_usd"];
   const esc=v=>v==null?"":(/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:String(v));
@@ -210,6 +305,7 @@ function downloadCSV(){
   const a=document.createElement("a"); a.href=url; a.download=fname; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 
+/* ============== Data load ============== */
 async function loadEquityMetricsTrades(){
   showErr("");
   const sel=$("#range").value;
@@ -231,8 +327,8 @@ async function loadEquityMetricsTrades(){
     ]);
     const labels=rows.map(r=>r.t), data=rows.map(r=>r.equity);
     if(!labels.length) showErr("No data for selected range.");
-    drawChart(labels,data);
 
+    // metrics
     const pfState=m.pf>1?"good":"bad";
     const winState=m.winrate>=50?"good":"warn";
     const ddState=m.max_dd<=-10?"bad":"good";
@@ -251,11 +347,15 @@ async function loadEquityMetricsTrades(){
 
     TRADES_ALL = Array.isArray(t)?t.slice():[];
     setBoundsFromData();
-    applyFiltersAndSort();
+
+    // draw with markers from current (initial) view
+    applyFiltersAndSort(); // will render table and refresh markers after filtering
+    drawChart(labels, data, TRADES_VIEW); // initial draw (also saves last series)
   }catch(e){ showErr("Backend error: "+e.message);
   }finally{ show(eqSpin,false); show(mtSpin,false); show(trSpin,false); }
 }
 
+/* ============== UI bind ============== */
 function bindUI(){
   const sel=$("#range"), custom=$("#customRange");
   const toggle=()=>{ const isCustom=sel.value==="custom"; custom.style.display=isCustom?"flex":"none"; if(!isCustom) loadEquityMetricsTrades(); };
