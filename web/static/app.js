@@ -1,24 +1,13 @@
 function fmt(n,d=2){return typeof n==="number"?n.toLocaleString("en-US",{maximumFractionDigits:d}):n}
 let chart;
 const $ = s => document.querySelector(s);
-
-function show(el, on){ el.style.display = on ? "block" : "none"; }
+function show(el,on){ el.style.display = on ? "block":"none"; }
 function showErr(msg){ const el=$("#err"); el.textContent=msg||""; show(el, !!msg); }
-
-async function getJSON(url){
-  const r = await fetch(url);
-  if(!r.ok) throw new Error(`${url} -> ${r.status}`);
-  return await r.json();
-}
+async function getJSON(url){ const r = await fetch(url); if(!r.ok) throw new Error(`${url} -> ${r.status}`); return await r.json(); }
 
 async function loadLatest(){
-  try{
-    const rows = await getJSON("/api/latest");
-    $("#root").textContent = JSON.stringify(rows.slice(-3), null, 2);
-  }catch(e){
-    console.error(e);
-    $("#root").textContent = "Failed to load /api/latest";
-  }
+  try{ const rows = await getJSON("/api/latest"); $("#root").textContent = JSON.stringify(rows.slice(-3), null, 2); }
+  catch(e){ $("#root").textContent = "Failed to load /api/latest"; }
 }
 
 function drawChart(labels, data){
@@ -30,38 +19,41 @@ function drawChart(labels, data){
   chart = new Chart(ctx,{
     type:"line",
     data:{labels, datasets:[{label:"Equity ($)", data, tension:0.25, fill:false, pointRadius:0}]},
-    options:{
-      responsive:false, animation:false,
-      scales:{ x:{ticks:{maxTicksLimit:6}}, y:{min:yMin,max:yMax,ticks:{stepSize:100}} },
-      plugins:{legend:{display:true}}
-    }
+    options:{ responsive:false, animation:false, scales:{ x:{ticks:{maxTicksLimit:6}}, y:{min:yMin,max:yMax,ticks:{stepSize:100}} }, plugins:{legend:{display:true}} }
   });
 }
 
-async function loadEquityAndMetrics(){
+function renderTrades(rows){
+  if(!rows.length){ $("#trades").innerHTML = "<div class='muted'>No trades</div>"; return; }
+  const head = "<tr><th>Time</th><th>Side</th><th>Entry</th><th>Exit</th><th>Ret%</th><th>PnL $</th></tr>";
+  const body = rows.map(r=>{
+    const cls = r.pnl_usd>=0 ? "pos":"neg";
+    return `<tr><td>${r.time}</td><td>${r.direction}</td><td>${fmt(r.entry,4)}</td><td>${fmt(r.exit,4)}</td><td>${fmt(r.ret_pct,2)}</td><td class='${cls}'>${fmt(r.pnl_usd,2)}</td></tr>`;
+  }).join("");
+  $("#trades").innerHTML = `<table>${head}${body}</table>`;
+}
+
+async function loadEquityMetricsTrades(){
   showErr("");
   const sel = $("#range").value;
-  const eqSpin = $("#equitySpin");
-  const mtSpin = $("#metricsSpin");
-  show(eqSpin, true); show(mtSpin, true);
+  const eqSpin=$("#equitySpin"), mtSpin=$("#metricsSpin"), trSpin=$("#tradesSpin");
+  show(eqSpin,true); show(mtSpin,true); show(trSpin,true);
 
-  let equityURL = "/api/equity";
-  let metricsURL = "/api/metrics";
-
+  let q = "";
   if(sel==="custom"){
     const s=$("#startDate").value, e=$("#endDate").value;
-    if(!(s&&e)){ show(eqSpin,false); show(mtSpin,false); return; }
-    equityURL += `?start=${s}&end=${e}`;
-    metricsURL += `?start=${s}&end=${e}`;
+    if(!(s&&e)){ show(eqSpin,false); show(mtSpin,false); show(trSpin,false); return; }
+    q = `?start=${s}&end=${e}`;
   }else if(sel){
-    const d=parseInt(sel,10);
-    equityURL += `?days=${d}`;
-    metricsURL += `?days=${d}`;
+    q = `?days=${parseInt(sel,10)}`;
   }
 
   try{
-    const [rows, m] = await Promise.all([ getJSON(equityURL), getJSON(metricsURL) ]);
-
+    const [rows, m, t] = await Promise.all([
+      getJSON("/api/equity"+q),
+      getJSON("/api/metrics"+q),
+      getJSON("/api/trades"+q+"&limit=50")
+    ]);
     const labels = rows.map(r=>r.t);
     const data   = rows.map(r=>r.equity);
     if(labels.length===0) showErr("No data for selected range.");
@@ -82,11 +74,12 @@ async function loadEquityAndMetrics(){
       card(fmt(m.pf,2),"PF",pfState)+
       card(fmt(m.sharpe,2),"Sharpe",shState)+
       card(fmt(m.max_dd,2)+"%","Max DD",ddState);
+
+    renderTrades(t);
   }catch(e){
-    console.error(e);
     showErr("Backend error: "+e.message);
   }finally{
-    show(eqSpin,false); show(mtSpin,false);
+    show(eqSpin,false); show(mtSpin,false); show(trSpin,false);
   }
 }
 
@@ -96,17 +89,17 @@ function bindUI(){
   const toggle=()=>{
     const isCustom = sel.value==="custom";
     custom.style.display = isCustom ? "flex":"none";
-    if(!isCustom) loadEquityAndMetrics();
+    if(!isCustom) loadEquityMetricsTrades();
   };
   sel.addEventListener("change",toggle);
-  $("#startDate").addEventListener("change",loadEquityAndMetrics);
-  $("#endDate").addEventListener("change",loadEquityAndMetrics);
+  $("#startDate").addEventListener("change",loadEquityMetricsTrades);
+  $("#endDate").addEventListener("change",loadEquityMetricsTrades);
   toggle();
 }
 
 async function boot(){
-  bindUI();
   await loadLatest();
-  await loadEquityAndMetrics();
+  bindUI();
+  await loadEquityMetricsTrades();
 }
 boot();
