@@ -1,3 +1,4 @@
+[![CI](https://github.com/oguzcamurr/algo-showcase/actions/workflows/ci.yml/badge.svg)](https://github.com/oguzcamurr/algo-showcase/actions/workflows/ci.yml)
 # Algo Showcase (Demo)
 
 > **Not:** Bu depo vitrin amaçlıdır. Canlı trade yok, parametreler maskeli, sentetik veri kullanılır.
