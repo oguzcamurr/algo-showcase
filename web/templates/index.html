@@ -18,6 +18,8 @@
     select,input{padding:6px 8px;border:1px solid #ddd;border-radius:8px}
     .note{font-size:12px;color:#666}
     #err{color:#b00020;font-size:13px;margin-top:6px;display:none}
+    .spinner{width:18px;height:18px;border:3px solid #ddd;border-top-color:#3b82f6;border-radius:50%;animation:spin 1s linear infinite;display:none;margin:6px 0}
+    @keyframes spin{to{transform:rotate(360deg)}}
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -44,12 +46,14 @@
 
     <div class="card">
       <h3>Equity Curve</h3>
+      <div id="equitySpin" class="spinner"></div>
       <div id="err"></div>
       <canvas id="equityChart" width="900" height="260"></canvas>
     </div>
 
     <div class="card">
       <h3>Metrics</h3>
+      <div id="metricsSpin" class="spinner"></div>
       <div id="metrics" class="kpis"></div>
     </div>
 

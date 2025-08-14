@@ -2,11 +2,8 @@ function fmt(n,d=2){return typeof n==="number"?n.toLocaleString("en-US",{maximum
 let chart;
 const $ = s => document.querySelector(s);
 
-function showErr(msg){
-  const el=$("#err");
-  el.textContent=msg||"";
-  el.style.display = msg ? "block":"none";
-}
+function show(el, on){ el.style.display = on ? "block" : "none"; }
+function showErr(msg){ const el=$("#err"); el.textContent=msg||""; show(el, !!msg); }
 
 async function getJSON(url){
   const r = await fetch(url);
@@ -44,17 +41,22 @@ function drawChart(labels, data){
 async function loadEquityAndMetrics(){
   showErr("");
   const sel = $("#range").value;
+  const eqSpin = $("#equitySpin");
+  const mtSpin = $("#metricsSpin");
+  show(eqSpin, true); show(mtSpin, true);
+
   let equityURL = "/api/equity";
   let metricsURL = "/api/metrics";
 
   if(sel==="custom"){
     const s=$("#startDate").value, e=$("#endDate").value;
-    if(!(s&&e)) return; // tarih seçilmeden yükleme
+    if(!(s&&e)){ show(eqSpin,false); show(mtSpin,false); return; }
     equityURL += `?start=${s}&end=${e}`;
     metricsURL += `?start=${s}&end=${e}`;
   }else if(sel){
-    equityURL += `?days=${parseInt(sel,10)}`;
-    metricsURL += `?days=${parseInt(sel,10)}`;
+    const d=parseInt(sel,10);
+    equityURL += `?days=${d}`;
+    metricsURL += `?days=${d}`;
   }
 
   try{
@@ -62,9 +64,7 @@ async function loadEquityAndMetrics(){
 
     const labels = rows.map(r=>r.t);
     const data   = rows.map(r=>r.equity);
-    if(labels.length===0){
-      showErr("No data for selected range.");
-    }
+    if(labels.length===0) showErr("No data for selected range.");
     drawChart(labels, data);
 
     const pfState = m.pf>1 ? "good" : "bad";
@@ -82,10 +82,11 @@ async function loadEquityAndMetrics(){
       card(fmt(m.pf,2),"PF",pfState)+
       card(fmt(m.sharpe,2),"Sharpe",shState)+
       card(fmt(m.max_dd,2)+"%","Max DD",ddState);
-
   }catch(e){
     console.error(e);
     showErr("Backend error: "+e.message);
+  }finally{
+    show(eqSpin,false); show(mtSpin,false);
   }
 }
 
