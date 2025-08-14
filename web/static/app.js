@@ -23,14 +23,118 @@ function drawChart(labels, data){
   });
 }
 
+/* === Trades state (filter + sort) === */
+let TRADES_ALL = [];
+let TRADES_VIEW = [];
+let sortKey = "time";   // default
+let sortDir = "desc";   // "asc" | "desc"
+let sideFilter = "ALL"; // "ALL" | "BUY" | "SELL"
+
+const KEY_TYPES = {
+  time: "str",
+  direction: "str",
+  entry: "num",
+  exit: "num",
+  ret_pct: "num",
+  pnl_usd: "num",
+};
+
+function applyFiltersAndSort(){
+  TRADES_VIEW = TRADES_ALL.filter(r => {
+    if(sideFilter === "ALL") return true;
+    return String(r.direction).toUpperCase() === sideFilter;
+  });
+
+  const t = KEY_TYPES[sortKey] || "str";
+  TRADES_VIEW.sort((a,b)=>{
+    let va = a[sortKey], vb = b[sortKey];
+    if(t === "num"){ va = Number(va); vb = Number(vb); }
+    else { va = String(va); vb = String(vb); }
+    if(va < vb) return sortDir==="asc" ? -1 : 1;
+    if(va > vb) return sortDir==="asc" ? 1 : -1;
+    return 0;
+  });
+
+  renderTrades(TRADES_VIEW);
+}
+
+function headerCell(label, key){
+  const arrow = sortKey===key ? (sortDir==="asc" ? "▲" : "▼") : "";
+  return `<th class="sortable" data-key="${key}">${label}<span class="arrow">${arrow}</span></th>`;
+}
+
 function renderTrades(rows){
   if(!rows.length){ $("#trades").innerHTML = "<div class='muted'>No trades</div>"; return; }
-  const head = "<tr><th>Time</th><th>Side</th><th>Entry</th><th>Exit</th><th>Ret%</th><th>PnL $</th></tr>";
-  const body = rows.map(r=>{
+
+  const thead =
+    `<thead><tr>`+
+    headerCell("Time","time")+
+    headerCell("Side","direction")+
+    headerCell("Entry","entry")+
+    headerCell("Exit","exit")+
+    headerCell("Ret%","ret_pct")+
+    headerCell("PnL $","pnl_usd")+
+    `</tr></thead>`;
+
+  const tbody = "<tbody>"+ rows.map(r=>{
     const cls = r.pnl_usd>=0 ? "pos":"neg";
-    return `<tr><td>${r.time}</td><td>${r.direction}</td><td>${fmt(r.entry,4)}</td><td>${fmt(r.exit,4)}</td><td>${fmt(r.ret_pct,2)}</td><td class='${cls}'>${fmt(r.pnl_usd,2)}</td></tr>`;
-  }).join("");
-  $("#trades").innerHTML = `<table>${head}${body}</table>`;
+    return `<tr>
+      <td>${r.time}</td>
+      <td>${r.direction}</td>
+      <td>${fmt(r.entry,4)}</td>
+      <td>${fmt(r.exit,4)}</td>
+      <td>${fmt(r.ret_pct,2)}</td>
+      <td class='${cls}'>${fmt(r.pnl_usd,2)}</td>
+    </tr>`;
+  }).join("") + "</tbody>";
+
+  $("#trades").innerHTML = `<table>${thead}${tbody}</table>`;
+
+  $("#trades").querySelectorAll("th.sortable").forEach(th=>{
+    th.addEventListener("click", ()=>{
+      const key = th.getAttribute("data-key");
+      if(key === sortKey){
+        sortDir = (sortDir==="asc") ? "desc" : "asc";
+      }else{
+        sortKey = key;
+        sortDir = (KEY_TYPES[key]==="num") ? "desc" : "asc";
+      }
+      applyFiltersAndSort();
+    });
+  });
+}
+
+/* === CSV Export === */
+function toCSV(rows){
+  const cols = ["time","direction","entry","exit","ret_pct","pnl_usd"];
+  const header = cols.join(",");
+  const esc = v => {
+    if(v==null) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+  };
+  const lines = rows.map(r => cols.map(c => esc(r[c])).join(","));
+  return [header, ...lines].join("\r\n");
+}
+
+function downloadCSV(){
+  const rows = TRADES_VIEW.length ? TRADES_VIEW : TRADES_ALL;
+  if(!rows.length){ alert("No trades to export."); return; }
+  const side = sideFilter.toLowerCase();
+  const now = new Date();
+  const pad = n => String(n).padStart(2,"0");
+  const fname = `trades_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}_${side}.csv`;
+
+  const csv = toCSV(rows);
+  const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 async function loadEquityMetricsTrades(){
@@ -75,7 +179,8 @@ async function loadEquityMetricsTrades(){
       card(fmt(m.sharpe,2),"Sharpe",shState)+
       card(fmt(m.max_dd,2)+"%","Max DD",ddState);
 
-    renderTrades(t);
+    TRADES_ALL = Array.isArray(t) ? t.slice() : [];
+    applyFiltersAndSort();
   }catch(e){
     showErr("Backend error: "+e.message);
   }finally{
@@ -94,6 +199,15 @@ function bindUI(){
   sel.addEventListener("change",toggle);
   $("#startDate").addEventListener("change",loadEquityMetricsTrades);
   $("#endDate").addEventListener("change",loadEquityMetricsTrades);
+
+  $("#sideFilter").addEventListener("change", (e)=>{
+    sideFilter = e.target.value;
+    applyFiltersAndSort();
+  });
+  // CSV
+  const btn = $("#btnCsv");
+  if(btn) btn.addEventListener("click", downloadCSV);
+
   toggle();
 }
 
