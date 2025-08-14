@@ -26,9 +26,19 @@ function drawChart(labels, data){
 /* === Trades state (filter + sort) === */
 let TRADES_ALL = [];
 let TRADES_VIEW = [];
-let sortKey = "time";   // default
-let sortDir = "desc";   // "asc" | "desc"
-let sideFilter = "ALL"; // "ALL" | "BUY" | "SELL"
+let sortKey = "time";
+let sortDir = "desc";
+let sideFilter = "ALL";
+
+// dynamic ranges
+let bounds = {
+  ret: {min: 0, max: 0},
+  pnl: {min: 0, max: 0}
+};
+let filters = {
+  retMin: null, retMax: null,
+  pnlMin: null, pnlMax: null
+};
 
 const KEY_TYPES = {
   time: "str",
@@ -39,10 +49,122 @@ const KEY_TYPES = {
   pnl_usd: "num",
 };
 
+function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
+
+function setBoundsFromData(){
+  if(!TRADES_ALL.length){
+    show($("#rangeFilters"), false);
+    return;
+  }
+  const rets = TRADES_ALL.map(r=>Number(r.ret_pct)).filter(n=>!Number.isNaN(n));
+  const pnls = TRADES_ALL.map(r=>Number(r.pnl_usd)).filter(n=>!Number.isNaN(n));
+  const rmin = Math.min(...rets), rmax = Math.max(...rets);
+  const pmin = Math.min(...pnls), pmax = Math.max(...pnls);
+
+  // tiny padding for nicer UX
+  const pad = (x)=> Math.abs(x)*0.02;
+  bounds.ret.min = Math.floor((rmin - pad(rmin)) * 100)/100;
+  bounds.ret.max = Math.ceil((rmax + pad(rmax)) * 100)/100;
+  bounds.pnl.min = Math.floor((pmin - pad(pmin)) * 100)/100;
+  bounds.pnl.max = Math.ceil((pmax + pad(pmax)) * 100)/100;
+
+  // default filters = full range
+  filters.retMin = bounds.ret.min;
+  filters.retMax = bounds.ret.max;
+  filters.pnlMin = bounds.pnl.min;
+  filters.pnlMax = bounds.pnl.max;
+
+  // init sliders
+  const retMinEl = $("#retMin"), retMaxEl = $("#retMax");
+  const pnlMinEl = $("#pnlMin"), pnlMaxEl = $("#pnlMax");
+
+  [retMinEl, retMaxEl].forEach(el=>{
+    el.min = bounds.ret.min; el.max = bounds.ret.max; el.step = "0.01";
+  });
+  [pnlMinEl, pnlMaxEl].forEach(el=>{
+    el.min = bounds.pnl.min; el.max = bounds.pnl.max; el.step = "0.01";
+  });
+
+  retMinEl.value = filters.retMin;
+  retMaxEl.value = filters.retMax;
+  pnlMinEl.value = filters.pnlMin;
+  pnlMaxEl.value = filters.pnlMax;
+
+  updateRangeReadouts();
+  show($("#rangeFilters"), true);
+}
+
+function updateRangeReadouts(){
+  $("#retReadout").textContent = `${Number(filters.retMin).toFixed(2)}% → ${Number(filters.retMax).toFixed(2)}%`;
+  $("#pnlReadout").textContent = `$${Number(filters.pnlMin).toFixed(2)} → $${Number(filters.pnlMax).toFixed(2)}`;
+
+  const isDefault = (
+    filters.retMin===bounds.ret.min &&
+    filters.retMax===bounds.ret.max &&
+    filters.pnlMin===bounds.pnl.min &&
+    filters.pnlMax===bounds.pnl.max &&
+    sideFilter==="ALL"
+  );
+  const chip = $("#activeFilters");
+  if(isDefault){ show(chip,false); chip.textContent=""; }
+  else{
+    chip.textContent = `Side:${sideFilter} • Ret%:${filters.retMin}→${filters.retMax} • PnL:${filters.pnlMin}→${filters.pnlMax}`;
+    show(chip,true);
+  }
+}
+
+function enforceMinMaxCouple(aEl,bEl,isRet){
+  // keep min <= max by swapping if needed
+  const minVal = Number(aEl.value), maxVal = Number(bEl.value);
+  if(minVal > maxVal){
+    // swap
+    const tmp = aEl.value;
+    aEl.value = bEl.value;
+    bEl.value = tmp;
+  }
+  if(isRet){
+    filters.retMin = Number($("#retMin").value);
+    filters.retMax = Number($("#retMax").value);
+  }else{
+    filters.pnlMin = Number($("#pnlMin").value);
+    filters.pnlMax = Number($("#pnlMax").value);
+  }
+  updateRangeReadouts();
+  applyFiltersAndSort();
+}
+
+let sliderDebounce;
+function onSliderChange(){
+  clearTimeout(sliderDebounce);
+  sliderDebounce = setTimeout(()=>{
+    enforceMinMaxCouple($("#retMin"), $("#retMax"), true);
+    enforceMinMaxCouple($("#pnlMin"), $("#pnlMax"), false);
+  }, 80);
+}
+
+function resetFilters(){
+  sideFilter = "ALL";
+  filters.retMin = bounds.ret.min;
+  filters.retMax = bounds.ret.max;
+  filters.pnlMin = bounds.pnl.min;
+  filters.pnlMax = bounds.pnl.max;
+
+  $("#sideFilter").value = "ALL";
+  $("#retMin").value = filters.retMin;
+  $("#retMax").value = filters.retMax;
+  $("#pnlMin").value = filters.pnlMin;
+  $("#pnlMax").value = filters.pnlMax;
+  updateRangeReadouts();
+  applyFiltersAndSort();
+}
+
 function applyFiltersAndSort(){
   TRADES_VIEW = TRADES_ALL.filter(r => {
-    if(sideFilter === "ALL") return true;
-    return String(r.direction).toUpperCase() === sideFilter;
+    const sideOk = (sideFilter==="ALL") ? true : String(r.direction).toUpperCase()===sideFilter;
+    const ret = Number(r.ret_pct), pnl = Number(r.pnl_usd);
+    const retOk = ret >= filters.retMin && ret <= filters.retMax;
+    const pnlOk = pnl >= filters.pnlMin && pnl <= filters.pnlMax;
+    return sideOk && retOk && pnlOk;
   });
 
   const t = KEY_TYPES[sortKey] || "str";
@@ -180,6 +302,7 @@ async function loadEquityMetricsTrades(){
       card(fmt(m.max_dd,2)+"%","Max DD",ddState);
 
     TRADES_ALL = Array.isArray(t) ? t.slice() : [];
+    setBoundsFromData();
     applyFiltersAndSort();
   }catch(e){
     showErr("Backend error: "+e.message);
@@ -202,11 +325,18 @@ function bindUI(){
 
   $("#sideFilter").addEventListener("change", (e)=>{
     sideFilter = e.target.value;
+    updateRangeReadouts();
     applyFiltersAndSort();
   });
-  // CSV
+  const sliders = ["retMin","retMax","pnlMin","pnlMax"].map(id=>$("#"+id));
+  sliders.forEach(el=>{
+    el.addEventListener("input", onSliderChange);
+    el.addEventListener("change", onSliderChange);
+  });
   const btn = $("#btnCsv");
   if(btn) btn.addEventListener("click", downloadCSV);
+  const btnReset = $("#btnReset");
+  if(btnReset) btnReset.addEventListener("click", resetFilters);
 
   toggle();
 }
